@@ -1,0 +1,726 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ระบบเช็คชื่อและตรวจสอบการวางมือถือ (ESP32)</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Fonts: Prompt & Inter -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Prompt:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Prompt', 'Inter', 'sans-serif'],
+                    },
+                    animation: {
+                        'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen flex flex-col font-sans selection:bg-indigo-500 selection:text-white">
+
+    <!-- Top Navigation / Header -->
+    <header class="bg-slate-800/80 backdrop-blur-md border-b border-slate-700 sticky top-0 z-30">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+            <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+                <!-- Title & Logo -->
+                <div class="flex items-center gap-3">
+                    <div class="p-2.5 bg-indigo-600 rounded-xl shadow-lg shadow-indigo-500/30">
+                        <i data-lucide="smartphone" class="w-6 h-6 text-white"></i>
+                    </div>
+                    <div>
+                        <h1 class="text-xl sm:text-2xl font-bold bg-gradient-to-r from-white to-slate-300 bg-clip-text text-transparent">
+                            Smart Phone Locker
+                        </h1>
+                        <p class="text-xs sm:text-sm text-slate-400">ระบบตรวจสอบการวางมือถือและเช็คชื่อเข้าเรียน Real-time</p>
+                    </div>
+                </div>
+
+                <!-- Connection Controls -->
+                <div class="flex flex-wrap items-center gap-2 sm:gap-3 bg-slate-900/60 p-2 rounded-xl border border-slate-700/80">
+                    <!-- Mode Selector -->
+                    <select id="connMode" class="bg-slate-800 text-sm text-slate-200 rounded-lg px-3 py-2 border border-slate-600 focus:outline-none focus:border-indigo-500">
+                        <option value="http">HTTP Polling (JSON)</option>
+                        <option value="ws">WebSocket (Real-time)</option>
+                    </select>
+
+                    <!-- IP Address Input -->
+                    <div class="relative flex-1 sm:w-48">
+                        <span class="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400 text-xs font-mono">IP</span>
+                        <input type="text" id="espIpInput" value="192.168.1.100" placeholder="เช่น 192.168.1.100" 
+                            class="w-full bg-slate-800 text-sm text-white font-mono rounded-lg pl-8 pr-3 py-2 border border-slate-600 focus:outline-none focus:border-indigo-500 transition-colors">
+                    </div>
+
+                    <!-- Connect Button -->
+                    <button id="connectBtn" onclick="toggleConnection()" 
+                        class="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-all shadow-md shadow-indigo-600/20 cursor-pointer">
+                        <i data-lucide="wifi" class="w-4 h-4"></i>
+                        <span id="connectBtnText">เชื่อมต่อ</span>
+                    </button>
+
+                    <!-- Simulation Toggle -->
+                    <button id="simBtn" onclick="toggleSimulation()" title="ทดสอบระบบโดยไม่ต้องต่อ ESP32 จริง"
+                        class="flex items-center gap-1.5 bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm font-medium px-3 py-2 rounded-lg border border-slate-600 transition-all cursor-pointer">
+                        <i data-lucide="cpu" class="w-4 h-4 text-amber-400"></i>
+                        <span class="hidden sm:inline">โหมดจำลอง</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+
+        <!-- Alert / Status Banner -->
+        <div id="statusBanner" class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-800/60 border border-slate-700 rounded-2xl p-4">
+            <div class="flex items-center gap-3">
+                <span id="statusIndicator" class="relative flex h-3.5 w-3.5">
+                    <span id="statusPing" class="hidden animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span id="statusDot" class="relative inline-flex rounded-full h-3.5 w-3.5 bg-rose-500"></span>
+                </span>
+                <div>
+                    <span id="statusText" class="text-sm font-medium text-slate-200">ยังไม่ได้เชื่อมต่อกับ ESP32</span>
+                    <p id="statusSubText" class="text-xs text-slate-400">กรุณาระบุ IP Address ของบอร์ดแล้วกดเชื่อมต่อ หรือเปิด "โหมดจำลอง" เพื่อทดสอบ</p>
+                </div>
+            </div>
+            <div class="flex items-center gap-2 self-end sm:self-center">
+                <span id="lastUpdateText" class="text-xs font-mono text-slate-400 bg-slate-900/80 px-2.5 py-1 rounded-md border border-slate-700/50">
+                    อัปเดตล่าสุด: --:--:--
+                </span>
+                <button onclick="openCodeModal()" class="text-xs flex items-center gap-1.5 bg-slate-700/80 hover:bg-slate-700 text-indigo-300 px-3 py-1.5 rounded-lg border border-slate-600/80 transition-colors cursor-pointer">
+                    <i data-lucide="code-2" class="w-3.5 h-3.5"></i>
+                    ดูโค้ด ESP32
+                </button>
+            </div>
+        </div>
+
+        <!-- Summary Cards -->
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <!-- Total Slots -->
+            <div class="bg-slate-800/80 border border-slate-700/80 rounded-2xl p-5 flex items-center justify-between shadow-sm">
+                <div>
+                    <p class="text-sm text-slate-400 font-medium">ช่องวางมือถือทั้งหมด</p>
+                    <p class="text-3xl font-bold text-white mt-1">10 <span class="text-sm font-normal text-slate-400">ช่อง</span></p>
+                </div>
+                <div class="p-3 bg-slate-700/50 rounded-xl text-slate-300">
+                    <i data-lucide="grid" class="w-7 h-7"></i>
+                </div>
+            </div>
+
+            <!-- Present / Phone Placed -->
+            <div class="bg-emerald-950/30 border border-emerald-800/50 rounded-2xl p-5 flex items-center justify-between shadow-sm">
+                <div>
+                    <p class="text-sm text-emerald-300/80 font-medium">เด็กวางมือถือ (มาเรียน)</p>
+                    <p class="text-3xl font-bold text-emerald-400 mt-1"><span id="presentCount">0</span> <span class="text-sm font-normal text-emerald-300/70">คน</span></p>
+                </div>
+                <div class="p-3 bg-emerald-500/20 rounded-xl text-emerald-400">
+                    <i data-lucide="check-circle-2" class="w-7 h-7"></i>
+                </div>
+            </div>
+
+            <!-- Absent / No Phone -->
+            <div class="bg-rose-950/30 border border-rose-800/50 rounded-2xl p-5 flex items-center justify-between shadow-sm">
+                <div>
+                    <p class="text-sm text-rose-300/80 font-medium">ยังไม่วางมือถือ (ขาดเรียน)</p>
+                    <p class="text-3xl font-bold text-rose-400 mt-1"><span id="absentCount">10</span> <span class="text-sm font-normal text-rose-300/70">คน</span></p>
+                </div>
+                <div class="p-3 bg-rose-500/20 rounded-xl text-rose-400">
+                    <i data-lucide="user-x" class="w-7 h-7"></i>
+                </div>
+            </div>
+        </div>
+
+        <!-- Toolbar for Grid -->
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2">
+            <div class="flex items-center gap-2">
+                <h2 class="text-lg font-semibold text-white">สถานะรายบุคคล (Switch 1 - 10)</h2>
+                <span id="simBadge" class="hidden text-xs font-medium bg-amber-500/20 text-amber-300 border border-amber-500/40 px-2.5 py-0.5 rounded-full">
+                    โหมดจำลอง: คลิกที่การ์ดเพื่อกดปุ่มค้างไว้
+                </span>
+            </div>
+            <div class="flex items-center gap-2">
+                <button onclick="openEditNamesModal()" class="text-xs sm:text-sm flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 px-3 py-1.5 rounded-lg border border-slate-700 transition-colors cursor-pointer">
+                    <i data-lucide="users" class="w-4 h-4 text-indigo-400"></i>
+                    แก้ไขรายชื่อนักเรียน
+                </button>
+                <button onclick="exportCSV()" class="text-xs sm:text-sm flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 px-3 py-1.5 rounded-lg border border-slate-700 transition-colors cursor-pointer">
+                    <i data-lucide="download" class="w-4 h-4 text-emerald-400"></i>
+                    ส่งออกรายงาน (CSV)
+                </button>
+            </div>
+        </div>
+
+        <!-- 10 Switch Slots Grid -->
+        <div id="slotsGrid" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+            <!-- Cards will be dynamically rendered here -->
+        </div>
+
+    </main>
+
+    <!-- Footer -->
+    <footer class="border-t border-slate-800 py-4 mt-8 text-center text-xs text-slate-500">
+        ทำงานร่วมกับ ESP32 Input Pull-up (กดปุ่ม/วางมือถือ = LOW [0] | ปล่อยปุ่ม/ไม่วาง = HIGH [1])
+    </footer>
+
+    <!-- Modal: ESP32 Example Code -->
+    <div id="codeModal" class="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+        <div class="bg-slate-800 border border-slate-700 rounded-2xl max-w-3xl w-full max-h-[90vh] flex flex-col shadow-2xl">
+            <div class="flex items-center justify-between px-6 py-4 border-b border-slate-700">
+                <div class="flex items-center gap-2">
+                    <i data-lucide="cpu" class="w-5 h-5 text-indigo-400"></i>
+                    <h3 class="text-lg font-semibold text-white">โค้ดตัวอย่างสำหรับ ESP32 (Arduino IDE)</h3>
+                </div>
+                <button onclick="closeCodeModal()" class="text-slate-400 hover:text-white p-1 rounded-lg cursor-pointer">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+            <div class="p-6 overflow-y-auto space-y-4 text-sm text-slate-300">
+                <p>อัปโหลดโค้ดด้านล่างลงในบอร์ด <strong>ESP32</strong> โดยต่อสวิตช์ทั้ง 10 ตัวเข้ากับขา GPIO ที่กำหนดและอีกขาต่อลง <strong>GND</strong> (ใช้ <code class="text-indigo-300 bg-slate-900 px-1.5 py-0.5 rounded">INPUT_PULLUP</code> ภายในบอร์ด):</p>
+                <div class="relative">
+                    <button onclick="copyEspCode()" class="absolute top-3 right-3 bg-indigo-600 hover:bg-indigo-500 text-white text-xs px-3 py-1.5 rounded-lg flex items-center gap-1.5 shadow cursor-pointer">
+                        <i data-lucide="copy" class="w-3.5 h-3.5"></i>
+                        <span id="copyBtnText">คัดลอกโค้ด</span>
+                    </button>
+                    <pre id="espCodeBlock" class="bg-slate-950 text-emerald-300 font-mono text-xs p-4 rounded-xl overflow-x-auto border border-slate-800 leading-relaxed">
+#include &lt;WiFi.h&gt;
+#include &lt;WebServer.h&gt;
+
+const char* ssid = "YOUR_WIFI_SSID";
+const char* password = "YOUR_WIFI_PASSWORD";
+
+WebServer server(80);
+
+// กำหนดขา GPIO ทั้ง 10 ตัวสำหรับต่อ Switch (ต่อลง GND)
+const int switchPins[10] = {13, 14, 27, 26, 25, 33, 32, 18, 19, 21};
+
+void handleStatus() {
+  // เปิด CORS เพื่อให้หน้าเว็บ HTML เรียกข้อมูลได้
+  server.sendHeader("Access-Control-Allow-Origin", "*");
+  server.sendHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+  
+  String json = "{\"switches\":[";
+  for (int i = 0; i &lt; 10; i++) {
+    // INPUT_PULLUP: กดปุ่มค้าง (วางมือถือ) = LOW (0) -> ส่งค่า true
+    bool isPressed = (digitalRead(switchPins[i]) == LOW);
+    json += (isPressed ? "true" : "false");
+    if (i &lt; 9) json += ",";
+  }
+  json += "]}";
+  
+  server.send(200, "application/json", json);
+}
+
+void setup() {
+  Serial.begin(115200);
+  
+  // ตั้งค่าขา Switch เป็น INPUT_PULLUP ทั้ง 10 ขา
+  for (int i = 0; i &lt; 10; i++) {
+    pinMode(switchPins[i], INPUT_PULLUP);
+  }
+
+  WiFi.begin(ssid, password);
+  Serial.print("Connecting to WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nConnected! IP Address: ");
+  Serial.println(WiFi.localIP());
+
+  server.on("/status", HTTP_GET, handleStatus);
+  server.begin();
+}
+
+void loop() {
+  server.handleClient();
+}</pre>
+                </div>
+                <div class="bg-amber-950/40 border border-amber-700/50 rounded-xl p-3 text-xs text-amber-200 flex items-start gap-2.5">
+                    <i data-lucide="alert-triangle" class="w-4 h-4 text-amber-400 shrink-0 mt-0.5"></i>
+                    <div>
+                        <strong>ข้อควรระวังเรื่อง Mixed Content (HTTPS / HTTP):</strong> หากเปิดไฟล์ HTML นี้ผ่านเว็บที่มี HTTPS เบราว์เซอร์อาจบล็อกการเชื่อมต่อไปยัง IP (HTTP) ของ ESP32 แนะนำให้เปิดไฟล์ <code class="underline">index.html</code> นี้จากในเครื่องคอมพิวเตอร์โดยตรง (Double-click เปิดไฟล์) หรืออนุญาต Insecure Content ในตั้งค่าเบราว์เซอร์
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Edit Student Names -->
+    <div id="namesModal" class="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+        <div class="bg-slate-800 border border-slate-700 rounded-2xl max-w-lg w-full max-h-[90vh] flex flex-col shadow-2xl">
+            <div class="flex items-center justify-between px-6 py-4 border-b border-slate-700">
+                <h3 class="text-lg font-semibold text-white">แก้ไขรายชื่อนักเรียนประจำช่อง (1-10)</h3>
+                <button onclick="closeEditNamesModal()" class="text-slate-400 hover:text-white p-1 rounded-lg cursor-pointer">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+            <div id="namesFormContainer" class="p-6 overflow-y-auto space-y-3">
+                <!-- Inputs generated dynamically -->
+            </div>
+            <div class="px-6 py-4 border-t border-slate-700 flex justify-end gap-2">
+                <button onclick="closeEditNamesModal()" class="px-4 py-2 text-sm text-slate-300 hover:bg-slate-700 rounded-lg cursor-pointer">ยกเลิก</button>
+                <button onclick="saveStudentNames()" class="px-4 py-2 text-sm bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-lg cursor-pointer">บันทึกข้อมูล</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="fixed bottom-5 right-5 bg-slate-800 border border-slate-600 text-white px-4 py-3 rounded-xl shadow-xl transform translate-y-20 opacity-0 transition-all duration-300 z-50 flex items-center gap-2.5 text-sm">
+        <i id="toastIcon" data-lucide="info" class="w-4 h-4 text-indigo-400"></i>
+        <span id="toastMessage">ข้อความแจ้งเตือน</span>
+    </div>
+
+    <script>
+        // ==========================================
+        // STATE & CONFIGURATION
+        // ==========================================
+        const TOTAL_SWITCHES = 10;
+        
+        // Load saved student names or use default
+        let studentNames = JSON.parse(localStorage.getItem('esp32_student_names')) || [
+            "เด็กชายกิตติพงศ์ ใจดี",
+            "เด็กหญิงณัฐชา รักเรียน",
+            "เด็กชายธนกฤต มุ่งมั่น",
+            "เด็กหญิงปวีณา สดใส",
+            "เด็กชายภานุพงศ์ เก่งกล้า",
+            "เด็กหญิงรินรดา มีสุข",
+            "เด็กชายวรเมธ ขยันยิ่ง",
+            "เด็กหญิงศิริพร งามตา",
+            "เด็กชายอภิสิทธิ์ ตั้งใจ",
+            "เด็กหญิงกมลชนก พากเพียร"
+        ];
+
+        // Load saved IP
+        const savedIp = localStorage.getItem('esp32_ip');
+        if (savedIp) {
+            document.getElementById('espIpInput').value = savedIp;
+        }
+
+        // State of 10 switches: true = pressed (วางมือถือ), false = released (ขาดเรียน)
+        let switchStates = new Array(TOTAL_SWITCHES).fill(false);
+        let placedTimestamps = new Array(TOTAL_SWITCHES).fill(null);
+
+        // Connection variables
+        let isConnected = false;
+        let isSimulating = false;
+        let pollingInterval = null;
+        let webSocket = null;
+        let errorCount = 0;
+
+        // ==========================================
+        // INITIALIZATION
+        // ==========================================
+        window.addEventListener('DOMContentLoaded', () => {
+            lucide.createIcons();
+            renderGrid();
+            updateSummary();
+        });
+
+        // ==========================================
+        // UI RENDERING
+        // ==========================================
+        function renderGrid() {
+            const grid = document.getElementById('slotsGrid');
+            grid.innerHTML = '';
+
+            for (let i = 0; i < TOTAL_SWITCHES; i++) {
+                const isPlaced = switchStates[i];
+                const card = document.createElement('div');
+                
+                // Styling based on switch state
+                const cardBaseClass = "relative rounded-2xl p-5 border-2 transition-all duration-300 flex flex-col justify-between select-none ";
+                const stateClass = isPlaced 
+                    ? "bg-emerald-950/40 border-emerald-500/80 shadow-lg shadow-emerald-950/50" 
+                    : "bg-slate-800/70 border-rose-500/40 hover:border-rose-500/70";
+                const simCursorClass = isSimulating ? "cursor-pointer active:scale-95" : "";
+
+                card.className = cardBaseClass + stateClass + " " + simCursorClass;
+                card.id = `slot-card-${i}`;
+                
+                // Allow clicking card to toggle switch in Simulation Mode
+                card.onclick = () => {
+                    if (isSimulating) {
+                        toggleSimulatedSwitch(i);
+                    }
+                };
+
+                const timeInfo = placedTimestamps[i] 
+                    ? `วางเมื่อ ${placedTimestamps[i]}` 
+                    : 'ยังไม่มีการวางมือถือ';
+
+                card.innerHTML = `
+                    <!-- Top Row: Switch Number & Logic Pill -->
+                    <div class="flex items-center justify-between mb-4">
+                        <span class="text-xs font-mono font-semibold px-2.5 py-1 rounded-lg ${isPlaced ? 'bg-emerald-500/20 text-emerald-300' : 'bg-slate-700 text-slate-300'}">
+                            ช่องที่ ${String(i + 1).padStart(2, '0')}
+                        </span>
+                        <span class="text-[11px] font-mono px-2 py-0.5 rounded border ${isPlaced ? 'border-emerald-500/40 text-emerald-400 bg-emerald-950/60' : 'border-slate-600 text-slate-400 bg-slate-900/60'}">
+                            ${isPlaced ? 'PRESSED (LOW)' : 'OPEN (HIGH)'}
+                        </span>
+                    </div>
+
+                    <!-- Center Icon & Status -->
+                    <div class="flex flex-col items-center text-center my-2">
+                        <div class="w-16 h-16 rounded-2xl flex items-center justify-center mb-3 transition-colors duration-300 ${isPlaced ? 'bg-emerald-500/20 text-emerald-400 ring-2 ring-emerald-500/40' : 'bg-rose-500/15 text-rose-400 ring-1 ring-rose-500/30'}">
+                            <i data-lucide="${isPlaced ? 'smartphone-charging' : 'user-x'}" class="w-8 h-8"></i>
+                        </div>
+                        
+                        <div class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-sm font-bold tracking-wide ${isPlaced ? 'bg-emerald-500 text-slate-950 shadow-md shadow-emerald-500/30' : 'bg-rose-500/20 text-rose-300 border border-rose-500/40'}">
+                            <span class="w-2 h-2 rounded-full ${isPlaced ? 'bg-slate-950 animate-pulse' : 'bg-rose-400'}"></span>
+                            ${isPlaced ? 'เด็กวางมือถือ' : 'ขาดเรียน'}
+                        </div>
+                    </div>
+
+                    <!-- Bottom Row: Student Name & Timestamp -->
+                    <div class="mt-4 pt-3 border-t ${isPlaced ? 'border-emerald-800/50' : 'border-slate-700/70'} text-center">
+                        <p class="text-sm font-medium text-white truncate" title="${studentNames[i]}">${studentNames[i]}</p>
+                        <p class="text-[11px] ${isPlaced ? 'text-emerald-300/80' : 'text-slate-400'} mt-0.5">${timeInfo}</p>
+                    </div>
+                `;
+
+                grid.appendChild(card);
+            }
+
+            lucide.createIcons();
+        }
+
+        function updateSummary() {
+            const present = switchStates.filter(Boolean).length;
+            const absent = TOTAL_SWITCHES - present;
+
+            document.getElementById('presentCount').textContent = present;
+            document.getElementById('absentCount').textContent = absent;
+        }
+
+        function updateSwitchData(newStates) {
+            if (!Array.isArray(newStates) || newStates.length < TOTAL_SWITCHES) return;
+
+            let hasChanged = false;
+            const nowStr = new Date().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+            for (let i = 0; i < TOTAL_SWITCHES; i++) {
+                const boolState = Boolean(newStates[i]);
+                if (switchStates[i] !== boolState) {
+                    switchStates[i] = boolState;
+                    placedTimestamps[i] = boolState ? nowStr : null;
+                    hasChanged = true;
+                }
+            }
+
+            document.getElementById('lastUpdateText').textContent = `อัปเดตล่าสุด: ${nowStr}`;
+
+            if (hasChanged) {
+                renderGrid();
+                updateSummary();
+            }
+        }
+
+        // ==========================================
+        // CONNECTION LOGIC (HTTP POLLING & WEBSOCKET)
+        // ==========================================
+        function toggleConnection() {
+            if (isConnected) {
+                disconnectESP32();
+            } else {
+                connectESP32();
+            }
+        }
+
+        function connectESP32() {
+            // Stop simulation if running
+            if (isSimulating) {
+                toggleSimulation();
+            }
+
+            const ip = document.getElementById('espIpInput').value.trim();
+            const mode = document.getElementById('connMode').value;
+
+            if (!ip) {
+                showToast('กรุณาระบุ IP Address ของ ESP32', 'error');
+                return;
+            }
+
+            localStorage.setItem('esp32_ip', ip);
+            isConnected = true;
+            errorCount = 0;
+
+            // Update UI button
+            const btn = document.getElementById('connectBtn');
+            btn.classList.replace('bg-indigo-600', 'bg-rose-600');
+            btn.classList.replace('hover:bg-indigo-500', 'hover:bg-rose-500');
+            document.getElementById('connectBtnText').textContent = 'ตัดการเชื่อมต่อ';
+
+            if (mode === 'http') {
+                setStatusBanner('connecting', `กำลังเชื่อมต่อ HTTP ไปยัง ${ip}...`, 'ดึงข้อมูลสถานะ Switch แบบ Real-time ทุก 300ms');
+                startHttpPolling(ip);
+            } else {
+                setStatusBanner('connecting', `กำลังเชื่อมต่อ WebSocket ไปยัง ws://${ip}:81...`, 'รอรับข้อมูล Push แบบ Real-time จาก ESP32');
+                startWebSocket(ip);
+            }
+        }
+
+        function disconnectESP32() {
+            isConnected = false;
+
+            if (pollingInterval) {
+                clearInterval(pollingInterval);
+                pollingInterval = null;
+            }
+
+            if (webSocket) {
+                webSocket.close();
+                webSocket = null;
+            }
+
+            const btn = document.getElementById('connectBtn');
+            btn.classList.replace('bg-rose-600', 'bg-indigo-600');
+            btn.classList.replace('hover:bg-rose-500', 'hover:bg-indigo-500');
+            document.getElementById('connectBtnText').textContent = 'เชื่อมต่อ';
+
+            setStatusBanner('disconnected', 'ตัดการเชื่อมต่อกับ ESP32 แล้ว', 'กดปุ่ม "เชื่อมต่อ" เพื่อเริ่มดึงข้อมูลอีกครั้ง');
+        }
+
+        // 1. HTTP Polling Mode (GET http://<IP>/status)
+        function startHttpPolling(ip) {
+            const fetchStatus = async () => {
+                if (!isConnected) return;
+                try {
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), 1500);
+
+                    const response = await fetch(`http://${ip}/status`, { 
+                        signal: controller.signal,
+                        cache: 'no-store'
+                    });
+                    clearTimeout(timeoutId);
+
+                    if (!response.ok) throw new Error('HTTP Error');
+                    
+                    const data = await response.json();
+                    // Supports {"switches": [true, false, ...]} or [1, 0, 1, ...]
+                    const states = Array.isArray(data) ? data : data.switches;
+
+                    if (states) {
+                        errorCount = 0;
+                        setStatusBanner('connected', `เชื่อมต่อกับ ESP32 (${ip}) สำเร็จ`, 'กำลังรับข้อมูลแบบ Real-time (HTTP Polling)');
+                        updateSwitchData(states);
+                    }
+                } catch (err) {
+                    errorCount++;
+                    if (errorCount >= 3) {
+                        setStatusBanner('error', `ไม่สามารถติดต่อ ESP32 (${ip}) ได้`, 'ตรวจสอบว่าเปิดบอร์ดแล้ว, อยู่ในวง Wi-Fi เดียวกัน หรือลองกด "ดูโค้ด ESP32"');
+                    }
+                }
+            };
+
+            fetchStatus();
+            pollingInterval = setInterval(fetchStatus, 300); // Poll every 300ms for real-time feel
+        }
+
+        // 2. WebSocket Mode (ws://<IP>:81)
+        function startWebSocket(ip) {
+            try {
+                webSocket = new WebSocket(`ws://${ip}:81`);
+
+                webSocket.onopen = () => {
+                    setStatusBanner('connected', `เชื่อมต่อ WebSocket (${ip}:81) สำเร็จ`, 'รับข้อมูลความเร็วสูงแบบ Real-time');
+                    showToast('เชื่อมต่อ WebSocket สำเร็จ', 'success');
+                };
+
+                webSocket.onmessage = (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+                        const states = Array.isArray(data) ? data : data.switches;
+                        if (states) updateSwitchData(states);
+                    } catch (e) {
+                        console.error('Invalid JSON from WebSocket:', event.data);
+                    }
+                };
+
+                webSocket.onerror = () => {
+                    setStatusBanner('error', `เกิดข้อผิดพลาด WebSocket (${ip}:81)`, 'ตรวจสอบว่าบอร์ดรัน WebSocket Server ที่พอร์ต 81 หรือเปลี่ยนเป็นโหมด HTTP');
+                };
+
+                webSocket.onclose = () => {
+                    if (isConnected) {
+                        setStatusBanner('error', 'การเชื่อมต่อ WebSocket ถูกตัดขาด', 'กำลังพยายามเชื่อมต่อใหม่...');
+                        setTimeout(() => {
+                            if (isConnected) startWebSocket(ip);
+                        }, 2000);
+                    }
+                };
+            } catch (e) {
+                setStatusBanner('error', 'รูปแบบ IP ไม่ถูกต้องหรือถูกบล็อกโดยเบราว์เซอร์', e.message);
+            }
+        }
+
+        // ==========================================
+        // SIMULATION MODE (FOR TESTING WITHOUT ESP32)
+        // ==========================================
+        function toggleSimulation() {
+            if (isConnected) {
+                disconnectESP32();
+            }
+
+            isSimulating = !isSimulating;
+            const simBtn = document.getElementById('simBtn');
+            const simBadge = document.getElementById('simBadge');
+
+            if (isSimulating) {
+                simBtn.classList.add('bg-amber-600', 'text-white', 'border-amber-500');
+                simBtn.classList.remove('bg-slate-700', 'text-slate-200');
+                simBadge.classList.remove('hidden');
+                setStatusBanner('sim', 'กำลังทำงานใน "โหมดจำลอง" (Simulation Mode)', 'คลิกที่การ์ดนักเรียนแต่ละคนด้านล่าง เพื่อจำลองการกดปุ่ม Switch ค้างไว้ (วางมือถือ)');
+                showToast('เปิดโหมดจำลองแล้ว คลิกที่การ์ดเพื่อทดสอบ', 'info');
+            } else {
+                simBtn.classList.remove('bg-amber-600', 'text-white', 'border-amber-500');
+                simBtn.classList.add('bg-slate-700', 'text-slate-200');
+                simBadge.classList.add('hidden');
+                setStatusBanner('disconnected', 'ปิดโหมดจำลองแล้ว', 'กรุณาระบุ IP Address ของบอร์ดแล้วกดเชื่อมต่อ');
+            }
+
+            renderGrid();
+        }
+
+        function toggleSimulatedSwitch(index) {
+            const newStates = [...switchStates];
+            newStates[index] = !newStates[index];
+            updateSwitchData(newStates);
+        }
+
+        // ==========================================
+        // STATUS BANNER & HELPERS
+        // ==========================================
+        function setStatusBanner(state, title, subtitle) {
+            const dot = document.getElementById('statusDot');
+            const ping = document.getElementById('statusPing');
+            const textEl = document.getElementById('statusText');
+            const subEl = document.getElementById('statusSubText');
+
+            textEl.textContent = title;
+            subEl.textContent = subtitle;
+
+            dot.className = 'relative inline-flex rounded-full h-3.5 w-3.5 ';
+            ping.classList.add('hidden');
+
+            if (state === 'connected') {
+                dot.classList.add('bg-emerald-500');
+                ping.classList.remove('hidden');
+                ping.className = 'animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75';
+            } else if (state === 'connecting' || state === 'sim') {
+                dot.classList.add('bg-amber-400');
+                ping.classList.remove('hidden');
+                ping.className = 'animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75';
+            } else {
+                dot.classList.add('bg-rose-500');
+            }
+        }
+
+        function showToast(message, type = 'info') {
+            const toast = document.getElementById('toast');
+            const msgEl = document.getElementById('toastMessage');
+            msgEl.textContent = message;
+
+            toast.classList.remove('translate-y-20', 'opacity-0');
+            setTimeout(() => {
+                toast.classList.add('translate-y-20', 'opacity-0');
+            }, 3000);
+        }
+
+        // ==========================================
+        // MODALS (ESP32 CODE & EDIT NAMES & CSV)
+        // ==========================================
+        function openCodeModal() {
+            document.getElementById('codeModal').classList.remove('hidden');
+        }
+
+        function closeCodeModal() {
+            document.getElementById('codeModal').classList.add('hidden');
+        }
+
+        function copyEspCode() {
+            const codeText = document.getElementById('espCodeBlock').innerText;
+            const textarea = document.createElement('textarea');
+            textarea.value = codeText;
+            document.body.appendChild(textarea);
+            textarea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textarea);
+
+            document.getElementById('copyBtnText').textContent = 'คัดลอกแล้ว!';
+            showToast('คัดลอกโค้ด ESP32 ลงคลิปบอร์ดแล้ว', 'success');
+            setTimeout(() => {
+                document.getElementById('copyBtnText').textContent = 'คัดลอกโค้ด';
+            }, 2000);
+        }
+
+        function openEditNamesModal() {
+            const container = document.getElementById('namesFormContainer');
+            container.innerHTML = '';
+
+            for (let i = 0; i < TOTAL_SWITCHES; i++) {
+                container.innerHTML += `
+                    <div class="flex items-center gap-3">
+                        <span class="text-xs font-mono bg-slate-900 text-slate-300 px-2.5 py-2 rounded-lg border border-slate-700 w-16 text-center">
+                            ช่อง ${i + 1}
+                        </span>
+                        <input type="text" id="student-name-input-${i}" value="${studentNames[i]}" 
+                            class="flex-1 bg-slate-900 text-sm text-white rounded-lg px-3 py-2 border border-slate-700 focus:outline-none focus:border-indigo-500">
+                    </div>
+                `;
+            }
+
+            document.getElementById('namesModal').classList.remove('hidden');
+        }
+
+        function closeEditNamesModal() {
+            document.getElementById('namesModal').classList.add('hidden');
+        }
+
+        function saveStudentNames() {
+            for (let i = 0; i < TOTAL_SWITCHES; i++) {
+                const val = document.getElementById(`student-name-input-${i}`).value.trim();
+                if (val) studentNames[i] = val;
+            }
+            localStorage.setItem('esp32_student_names', JSON.stringify(studentNames));
+            renderGrid();
+            closeEditNamesModal();
+            showToast('บันทึกรายชื่อนักเรียนเรียบร้อยแล้ว', 'success');
+        }
+
+        function exportCSV() {
+            const now = new Date().toLocaleString('th-TH');
+            let csvContent = "\uFEFF"; // BOM for Thai UTF-8 in Excel
+            csvContent += `รายงานการวางมือถือและเช็คชื่อเข้าเรียน (${now})\n`;
+            csvContent += "ช่องที่,ชื่อ-นามสกุล,สถานะSwitch,สถานะการเข้าเรียน,เวลาที่วางมือถือ\n";
+
+            for (let i = 0; i < TOTAL_SWITCHES; i++) {
+                const isPlaced = switchStates[i];
+                const swText = isPlaced ? "กดค้าง (LOW)" : "ไม่กด (HIGH)";
+                const statusText = isPlaced ? "เด็กวางมือถือ" : "ขาดเรียน";
+                const timeText = placedTimestamps[i] || "-";
+                csvContent += `${i + 1},"${studentNames[i]}","${swText}","${statusText}","${timeText}"\n`;
+            }
+
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.setAttribute("href", url);
+            link.setAttribute("download", `attendance_report_${new Date().toISOString().slice(0,10)}.csv`);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            showToast('ดาวน์โหลดไฟล์รายงาน CSV สำเร็จ', 'success');
+        }
+    </script>
+</body>
+</html>
